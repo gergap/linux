@@ -1319,12 +1319,16 @@ static int nct6683_probe(struct platform_device *pdev)
 	/* By default only instantiate driver if the customer ID is known */
 	switch (data->customer_id) {
 	case NCT6683_CUSTOMER_ID_INTEL:
+		printk(KERN_INFO "INTEL\n");
 		break;
 	case NCT6683_CUSTOMER_ID_MITAC:
+		printk(KERN_INFO "MITAC\n");
 		break;
 	case NCT6683_CUSTOMER_ID_MSI:
+		printk(KERN_INFO "MSI\n");
 		break;
 	default:
+		printk(KERN_INFO "customer_id = 0x%04x\n", data->customer_id);
 		if (!force)
 			return -ENODEV;
 	}
@@ -1460,8 +1464,10 @@ static int __init nct6683_find(int sioaddr, struct nct6683_sio_data *sio_data)
 		break;
 	case SIO_NCT6687_ID:
 		sio_data->kind = nct6687;
+		printk(KERN_INFO "found NCT6687D\n");
 		break;
 	default:
+		printk(KERN_INFO "NCT6687D not found: val=0x%04x\n", val);
 		if (val != 0xffff)
 			pr_debug("unsupported chip ID: 0x%04x\n", val);
 		goto fail;
@@ -1476,6 +1482,7 @@ static int __init nct6683_find(int sioaddr, struct nct6683_sio_data *sio_data)
 		pr_err("EC base I/O port unconfigured\n");
 		goto fail;
 	}
+	printk(KERN_INFO "base addr = 0x%04x\n", addr);
 
 	/* Activate logical device if needed */
 	val = superio_inb(sioaddr, SIO_REG_ENABLE);
@@ -1489,9 +1496,11 @@ static int __init nct6683_find(int sioaddr, struct nct6683_sio_data *sio_data)
 		nct6683_chip_names[sio_data->kind], sioaddr, addr);
 	sio_data->sioreg = sioaddr;
 
+	printk(KERN_INFO "nct6683_find success\n");
 	return addr;
 
 fail:
+	printk(KERN_INFO "nct6683_find failure\n");
 	superio_exit(sioaddr);
 	return -ENODEV;
 }
