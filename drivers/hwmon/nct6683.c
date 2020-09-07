@@ -12,6 +12,7 @@
  *
  * Chip        #vin    #fan    #pwm    #temp  chip ID
  * nct6683d     21(1)   16      8       32(1) 0xc730
+ * nct6687d     21(1)   16      8        7    0xd592
  *
  * Notes:
  *	(1) Total number of vin and temp inputs is 32.
@@ -32,7 +33,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
-enum kinds { nct6683 };
+enum kinds { nct6683, nct6687 };
 
 static bool force;
 module_param(force, bool, 0);
@@ -40,10 +41,12 @@ MODULE_PARM_DESC(force, "Set to one to enable support for unknown vendors");
 
 static const char * const nct6683_device_names[] = {
 	"nct6683",
+	"nct6687",
 };
 
 static const char * const nct6683_chip_names[] = {
 	"NCT6683D",
+	"NCT6687D",
 };
 
 #define DRVNAME "nct6683"
@@ -63,6 +66,7 @@ static const char * const nct6683_chip_names[] = {
 
 #define SIO_NCT6681_ID		0xb270	/* for later */
 #define SIO_NCT6683_ID		0xc730
+#define SIO_NCT6687_ID		0xd590  /* 0xd592 on MSI Tomahawk B550 */
 #define SIO_ID_MASK		0xFFF0
 
 static inline void
@@ -164,6 +168,7 @@ superio_exit(int ioreg)
 #define NCT6683_REG_CUSTOMER_ID		0x602
 #define NCT6683_CUSTOMER_ID_INTEL	0x805
 #define NCT6683_CUSTOMER_ID_MITAC	0xa0e
+#define NCT6683_CUSTOMER_ID_MSI		0x201
 
 #define NCT6683_REG_BUILD_YEAR		0x604
 #define NCT6683_REG_BUILD_MONTH		0x605
@@ -277,6 +282,51 @@ static const char *const nct6683_mon_label[] = {
 	"VIN14",
 	"VIN15",
 	"VIN16",
+};
+
+static const char * const nct6687_temp_names[] = {
+	"CPU",
+	"System",
+	"MOS",
+	"PCH",
+	"CPU Socket",
+	"PCIE_1",
+	"M2_1",
+};
+
+static const char * const nct6687_volt_names[] = {
+	"VIN0 +12V",
+	"VIN1 +5V",
+	"VIN2 VCore",
+	"VIN3 SIO",
+	"VIN4 DRAM",
+	"VIN5 CPU IO",
+	"VIN6 CPU SA",
+	"VIN7 SIO",
+	"3VCC I/O +3.3",
+	"SIO VTT",
+	"SIO VREF",
+	"SIO VSB",
+	"SIO AVSB",
+	"SIO VBAT",
+	"CPU",
+	"System",
+	"MOS",
+	"PCH",
+	"CPU Socket",
+	"PCIE_1",
+	"M2_1",
+};
+
+static const char * const nct6687_fan_names[] = {
+	"CPU Fan",
+	"PUMP Fan",
+	"SYS Fan 1",
+	"SYS Fan 2",
+	"SYS Fan 3",
+	"SYS Fan 4",
+	"SYS Fan 5",
+	"SYS Fan 6",
 };
 
 #define NUM_MON_LABELS		ARRAY_SIZE(nct6683_mon_label)
@@ -656,7 +706,21 @@ show_in_label(struct device *dev, struct device_attribute *attr, char *buf)
 	struct nct6683_data *data = nct6683_update_device(dev);
 	int nr = sattr->index;
 
-	return sprintf(buf, "%s\n", nct6683_mon_label[data->in_src[nr]]);
+	switch (data->kind) {
+	case nct6683:
+		return sprintf(buf, "%s\n", nct6683_mon_label[data->in_src[nr]]);
+	case nct6687:
+		if (nr >= 0 && nr < ARRAY_SIZE(nct6687_volt_names))
+			return sprintf(buf, "%s\n", nct6687_volt_names[nr]);
+		else
+			pr_err("%s: nr out of range", __func__);
+		break;
+	default:
+		pr_err("%s: invalid kind", __func__);
+		break;
+	}
+
+	return sprintf(buf, "\n");
 }
 
 static ssize_t
@@ -706,6 +770,30 @@ static const struct sensor_template_group nct6683_in_template_group = {
 	.templates = nct6683_attributes_in_template,
 	.is_visible = nct6683_in_is_visible,
 };
+
+static ssize_t
+show_fan_label(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct sensor_device_attribute *sattr = to_sensor_dev_attr(attr);
+	struct nct6683_data *data = nct6683_update_device(dev);
+	int nr = sattr->index;
+
+	switch (data->kind) {
+	case nct6683:
+		return sprintf(buf, "fan%i\n", nr+1);
+	case nct6687:
+		if (nr >= 0 && nr < ARRAY_SIZE(nct6687_fan_names))
+			return sprintf(buf, "%s\n", nct6687_fan_names[nr]);
+		else
+			pr_err("%s: nr out of range", __func__);
+		break;
+	default:
+		pr_err("%s: invalid kind", __func__);
+		break;
+	}
+
+	return sprintf(buf, "\n");
+}
 
 static ssize_t
 show_fan(struct device *dev, struct device_attribute *attr, char *buf)
@@ -758,6 +846,7 @@ static umode_t nct6683_fan_is_visible(struct kobject *kobj,
 }
 
 SENSOR_TEMPLATE(fan_input, "fan%d_input", S_IRUGO, show_fan, NULL, 0);
+SENSOR_TEMPLATE(fan_label, "fan%d_label", S_IRUGO, show_fan_label, NULL, 0);
 SENSOR_TEMPLATE(fan_pulses, "fan%d_pulses", S_IRUGO, show_fan_pulses, NULL, 0);
 SENSOR_TEMPLATE(fan_min, "fan%d_min", S_IRUGO, show_fan_min, NULL, 0);
 
@@ -768,6 +857,7 @@ SENSOR_TEMPLATE(fan_min, "fan%d_min", S_IRUGO, show_fan_min, NULL, 0);
  */
 static struct sensor_device_template *nct6683_attributes_fan_template[] = {
 	&sensor_dev_template_fan_input,
+	&sensor_dev_template_fan_label,
 	&sensor_dev_template_fan_pulses,
 	&sensor_dev_template_fan_min,
 	NULL
@@ -786,7 +876,21 @@ show_temp_label(struct device *dev, struct device_attribute *attr, char *buf)
 	struct nct6683_data *data = nct6683_update_device(dev);
 	int nr = sattr->index;
 
-	return sprintf(buf, "%s\n", nct6683_mon_label[data->temp_src[nr]]);
+	switch (data->kind) {
+	case nct6683:
+		return sprintf(buf, "%s\n", nct6683_mon_label[data->temp_src[nr]]);
+	case nct6687:
+		if (nr >= 0 && nr < ARRAY_SIZE(nct6687_temp_names))
+			return sprintf(buf, "%s\n", nct6687_temp_names[nr]);
+		else
+			pr_err("%s: nr out of range", __func__);
+		break;
+	default:
+		pr_err("%s: invalid kind", __func__);
+		break;
+	}
+
+	return sprintf(buf, "\n");
 }
 
 static ssize_t
@@ -1218,6 +1322,8 @@ static int nct6683_probe(struct platform_device *pdev)
 		break;
 	case NCT6683_CUSTOMER_ID_MITAC:
 		break;
+	case NCT6683_CUSTOMER_ID_MSI:
+		break;
 	default:
 		if (!force)
 			return -ENODEV;
@@ -1351,6 +1457,9 @@ static int __init nct6683_find(int sioaddr, struct nct6683_sio_data *sio_data)
 	switch (val & SIO_ID_MASK) {
 	case SIO_NCT6683_ID:
 		sio_data->kind = nct6683;
+		break;
+	case SIO_NCT6687_ID:
+		sio_data->kind = nct6687;
 		break;
 	default:
 		if (val != 0xffff)
